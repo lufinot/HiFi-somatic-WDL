@@ -12,6 +12,8 @@ import "tasks/annotation.wdl" as annotation
 import "tasks/prioritization.wdl" as prioritization
 import "tasks/clonality.wdl" as clonality
 import "tasks/deepsomatic.wdl" as deepsomatic
+import "tasks/sniffles.wdl" as sniffles
+import "tasks/trgt.wdl" as trgt
 
 workflow hifisomatic {
   input {
@@ -82,6 +84,7 @@ workflow hifisomatic {
     # Amber, Cobalt and Purple
     File? ensembl_data_dir_tarball
     Int hmftools_threads = 8
+    Boolean trgrt_sniffles = true
   }
 
   scatter (individual in cohort.patients) {
@@ -89,6 +92,7 @@ workflow hifisomatic {
     Array[File] patient_tumor_bam_files = individual.tumor_bams
     Array[File] patient_normal_bam_files = individual.normal_bams
     File ref_to_use = select_first([ref_fasta_mmi, ref_fasta])
+    
 
     if(!skip_align){
       scatter (tumor_bam in patient_tumor_bam_files) {
@@ -160,6 +164,7 @@ workflow hifisomatic {
     }
     
     if (call_small_variants) {
+
           if (use_deepsomatic){
             call deepsomatic.run_deepsomatic {
               input:
@@ -385,6 +390,48 @@ workflow hifisomatic {
           pname = patient
       }
     }
+    if (trgrt_sniffles) {
+      call trgt.trgt as trgt_tumor {
+          input:
+              bam = select_first([phaseTumorBam.hiphase_bam, MergeNormalBams.merged_aligned_bam]),
+              bam_index = select_first([phaseTumorBam.hiphase_bam_index, MergeNormalBams.merged_aligned_bam_index]),
+              pname = patient + ".tumor",
+              sex = select_first([individual.sex]),  # Assuming sex is defined in the cohort input
+              ref_fasta = ref_fasta,
+              ref_fasta_index = ref_fasta_index,
+              tandem_repeat_bed = trf_bed,
+              threads = def_threads
+      }
+      call sniffles.sniffles as sniffles_tumor {
+          input:
+              bam = select_first([phaseTumorBam.hiphase_bam, MergeNormalBams.merged_aligned_bam]),
+              bam_index = select_first([phaseTumorBam.hiphase_bam_index, MergeNormalBams.merged_aligned_bam_index]),
+              pname = patient + ".tumor",
+              ref_fasta = ref_fasta,
+              ref_fasta_index = ref_fasta_index,
+              threads = def_threads
+      }
+        call trgt.trgt as trgt_normal {
+          input:
+              bam = select_first([phaseNormalBam.hiphase_bam, MergeNormalBams.merged_aligned_bam]),
+              bam_index = select_first([phaseNormalBam.hiphase_bam_index, MergeNormalBams.merged_aligned_bam_index]),
+              pname = patient + ".normal",
+              sex = select_first([individual.sex]),  # Assuming sex is defined in the cohort input
+              ref_fasta = ref_fasta,
+              ref_fasta_index = ref_fasta_index,
+              tandem_repeat_bed = trf_bed,
+              threads = def_threads
+      }
+      call sniffles.sniffles as sniffles_normal {
+          input:
+              bam = select_first([phaseNormalBam.hiphase_bam, MergeNormalBams.merged_aligned_bam]),
+              bam_index = select_first([phaseNormalBam.hiphase_bam_index, MergeNormalBams.merged_aligned_bam_index]),
+              pname = patient + ".normal",
+              ref_fasta = ref_fasta,
+              ref_fasta_index = ref_fasta_index,
+              threads = def_threads
+      }
+    }
 
     if(call_small_variants){
       call structural_variants.Severus_sv as phased_severus {
@@ -572,12 +619,22 @@ workflow hifisomatic {
               chord_file = select_first([chord_hrd.chord_prediction]),
               pname = patient
           }
-      }
+        }
       }
     }
   }
 
   output {
+    Array[File?] tumor_trgt_spanning_reads = trgt_tumor.spanning_reads
+    Array[File?] tumor_trgt_spanning_reads_index = trgt_tumor.spanning_reads_index
+    Array[File?] tumor_trgt_repeat_vcf = trgt_tumor.repeat_vcf
+    Array[File?] tumor_trgt_repeat_vcf_index = trgt_tumor.repeat_vcf_index
+    Array[File?] tumor_sniffles_sv_vcf = sniffles_tumor.sv_vcf
+    Array[File?] normal_trgt_spanning_reads = trgt_normal.spanning_reads
+    Array[File?] normal_trgt_spanning_reads_index = trgt_normal.spanning_reads_index
+    Array[File?] normal_trgt_repeat_vcf = trgt_normal.repeat_vcf
+    Array[File?] normal_trgt_repeat_vcf_index = trgt_normal.repeat_vcf_index
+    Array[File?] normal_sniffles_sv_vcf = sniffles_normal.sv_vcf
     Array[File?] small_variant_vcf = phaseTumorBam.hiphase_somatic_small_variants_vcf
     Array[File?] small_variant_vcf_annotated = annotateSomatic.vep_annotated_vcf
     Array[File?] small_variant_tsv_annotated = prioritizeSomatic.vep_annotated_tsv
